@@ -1,0 +1,61 @@
+name: revue-agentique
+
+# Revue de PR par un agent, en CI. L'agent CONSEILLE, il ne merge jamais :
+# le merge reste protege par la branch protection (approbation humaine requise).
+# Decision HYBRIDE : la production tourne sur Claude Code (stable), pas pi.dev.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write # poster/editer le commentaire de revue
+
+# Une seule revue en vol par PR : un nouveau push annule la precedente
+# (evite les commentaires concurrents et la consommation inutile de quota).
+concurrency:
+  group: revue-agentique-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  revue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # cout/duree bornes (Lab J5.2)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # necessaire pour le diff base...HEAD
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Diff de la PR
+        run: git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+
+      - name: Court-circuit PR triviale (doc seule)
+        id: filtre
+        run: |
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -vqE '\.md$'; then
+            echo "revue=oui" >> "$GITHUB_OUTPUT"
+          else
+            echo "revue=non" >> "$GITHUB_OUTPUT"
+            echo "Diff documentaire uniquement : revue non necessaire." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Revue par l'agent (headless)
+        if: steps.filtre.outputs.revue == 'oui'
+        env:
+          # Secret injecte depuis Settings -> Secrets and variables -> Actions.
+          # JAMAIS de cle en clair dans ce fichier.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/revue-agent.mjs /tmp/pr.diff > /tmp/verdict.json
+
+      - name: Valider le verdict (schema) et publier
+        if: steps.filtre.outputs.revue == 'oui'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/publier-verdict.mjs /tmp/verdict.json

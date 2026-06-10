@@ -1,105 +1,80 @@
-# OpsDesk - guide pour agents (CLAUDE.md)
+# OpsDesk — Guide pour agents (CLAUDE.md)
 
-OpsDesk est un mini back-office de gestion de tickets de support.
-Stack : TypeScript / Node + Fastify + SQLite (better-sqlite3) + Vitest +
-GitHub Actions. Toutes les commandes se lancent depuis la **racine** du repo,
-avec **npm**.
+OpsDesk est un back-office de tickets de support. Stack : **TypeScript/Node +
+Fastify + SQLite (better-sqlite3) + Vitest + GitHub Actions**. Toutes les
+commandes se lancent depuis la **racine** du depot, en **npm**.
+
+## Domaine et conventions
+
+- Table `tickets` (anglais) : `id, subject, body, category, priority, status,
+  created_at`. Base : `data/opsdesk.db`. Tickets de seed : ids **1001..1012**.
+- `status` ∈ `{open, in_progress, closed}` (jamais `pending`).
+- Outils MCP exposes : `list_tickets`, `get_ticket`, `update_ticket_status`.
+- Schema de classification (`src/classification/schema.ts`) : `categorie` ∈
+  `{acces, facturation, bug, demande, autre}`, `priorite` entier 1-3,
+  `besoin_humain` booleen, `confiance` 0..1, `justification` string.
+  Sortie : `{ categorie, priorite, besoin_humain, confiance, justification }`.
 
 ## Commandes
 
-- `npm install` - installe les dependances.
-- `npm run seed` - peuple `data/opsdesk.db` (12 tickets, ids 1001..1012).
-- `npm run dev` - demarre l'API Fastify (port `PORT` ou 3000).
-- `npm test` / `npx vitest run` - lance la suite de tests.
-- `npm run build` - compile TypeScript.
-
-## Conventions du domaine (a respecter a l'identique)
-
-- Table `tickets` (anglais) : `id`, `subject`, `body`, `category`, `priority`,
-  `status`, `created_at`. Base : `data/opsdesk.db`.
-- `status` appartient strictement a `{ open, in_progress, closed }` - **jamais
-  `pending`**.
-- `priority` : entier `1..3`. Categories :
-  `{ acces, facturation, bug, demande, autre }`.
-- Acces base **toujours parametre** (`prepare(...).run/get/all`). Jamais de
-  concatenation de chaine, jamais de SQL libre.
-- Classification (J2) : schema canonique `src/classification/schema.ts`,
-  sortie `{ categorie, priorite, besoin_humain, confiance, justification }`.
-
-## Convention d'outil (J2/J4)
-
-Un outil expose a un agent = un **contrat** :
-**nom verbe-objet** + **description "quand / quand-pas"** + **schema d'arguments
-type** + **erreurs renvoyees en resultat** (pas en exception). Exemple :
-`update_ticket_status` (intentionnel) plutot que `run_query` (generique et
-dangereux).
-
-## Serveur MCP `tickets` (J4)
-
-Le serveur `mcp/tickets-server.mjs` est un **guichet gouverne** sur la base
-SQLite. Il expose EXACTEMENT trois outils intentionnels, tous a requetes
-parametrees :
-
-- `list_tickets { status? }` - liste (filtre optionnel par statut).
-- `get_ticket { id }` - un ticket, ou `{ erreur: "ticket <id> introuvable" }`.
-- `update_ticket_status { id, status }` - met a jour le statut.
-
-**Aucun** outil `run_query` / `execute_sql` n'est expose : ce que l'agent ne
-peut pas faire est aussi important que ce qu'il peut faire. Traiter ce serveur
-comme une **dependance de securite** (surface minimale, version epinglee).
-
-Brancher le serveur dans Claude Code (depuis la racine, chemin absolu) :
-
-```bash
-claude mcp add tickets -- node "$(pwd)/mcp/tickets-server.mjs"
-claude mcp list   # attendu : tickets ... connected
-```
-
-Retirer si besoin : `claude mcp remove tickets`.
-
-## Sous-agents et orchestration (J4)
-
-Trois sous-agents specialises sont versionnes dans `.claude/agents/`, aux
-roles non chevauchants et outils restreints (moindre privilege) :
-
-- **planner** (`planner.md`) - lecture seule (+ MCP `list_tickets`/`get_ticket`).
-  Produit un plan numerote dans `plans/<feature>.plan.md`. **Ne code pas.**
-- **builder** (`builder.md`) - Read/Write/Edit + Bash (tests) + MCP
-  `update_ticket_status`. **Execute le plan** tel quel, ecrit code + tests.
-  **Ne redefinit pas le perimetre.**
-- **reviewer** (`reviewer.md`) - lecture seule + Bash (relancer les tests).
-  Rend un **verdict** dans `reviews/<feature>.review.md`. **Ne corrige pas.**
-
-### Workflow d'orchestration (pipeline Chain)
-
-Pour livrer une feature, derouler la chaine **sequentielle** avec un point de
-controle humain a chaque jonction :
-
-```
-planner -> [valider le plan] -> builder -> [tests verts] -> reviewer -> [lire le verdict] -> merge
-```
-
-- Point de controle n.1 : l'ingenieur relit le plan (accepte / amende / refuse,
-  trace en une ligne dans `plans/`).
-- Point de controle n.2 : `npx vitest run` doit etre **vert** avant la revue.
-- Point de controle n.3 : l'ingenieur lit le verdict et tranche le merge.
-
-L'**etat passe par des fichiers** (`TODO.md`, `plans/`, `reviews/`), heritage
-de la pratique etat-en-fichiers de J3.
-
-> Orchestration : le **spawn massif d'agents en parallele** est un **debat**,
-> pas un dogme. Position de Mario **Zechner** (pi.dev) : c'est un
-> **anti-pattern** (perte d'observabilite, conflits d'ecriture, couts qui
-> explosent, relecture humaine impossible). On privilegie donc **peu d'agents
-> enchaines de facon lisible** + **etat-en-fichiers** + **observabilite** (trace
-> d'appels d'outils MCP, suivi type tmux). Le parallele ne se justifie que sur
-> des taches **reellement independantes, sans etat partage**, et **jamais** au
-> prix de la relecture humaine.
+- `npm run dev` — serveur Fastify (`src/server.ts`).
+- `npm run seed` — insere les 12 tickets (1001..1012).
+- `npm test` — Vitest (base en memoire).
+- `npm run build` — `tsc`.
 
 ## Garde-fous
 
-- Relecture humaine **structurelle** : on ne merge jamais sur la seule parole
-  d'un agent ; le verdict ne remplace pas l'execution des tests.
-- Le secret `OPSDESK_API_KEY` (`src/config.ts`, motif `opsdesk_live_`) est
-  **volontairement** present et neutralise par le hook de gouvernance (J2) :
-  ne pas le supprimer.
+- **Secret piege** : `OPSDESK_API_KEY` dans `src/config.ts` (motif
+  `opsdesk_live_`). Le **hook bloquant (J2) reste actif** et empeche ce motif de
+  fuiter dans un commit. On ne supprime pas le secret du fichier : on le neutralise
+  par le hook. Les vraies cles vivent en variables d'environnement / secrets.
+- Sortie structuree **validee par schema** : on ne fait jamais confiance a une
+  sortie de modele non validee (classification de ticket, verdict de revue).
+
+## Mise en production (CI agentique)
+
+Un **agent de revue de PR** tourne en CI (GitHub Actions). Il **conseille, il ne
+merge jamais** : le merge reste protege par la branch protection (approbation
+humaine obligatoire). Decision **HYBRIDE** : la production tourne sur **Claude Code
+(stable)** ; pi.dev n'entre pas dans le pipeline (cf. `docs/decisions/adr-001-mise-en-prod.md`).
+
+Artefacts (tous versionnes, reutilisables sur tout futur repo) :
+
+- `.github/agent/revue-pr.md` — prompt de revue (un prompt est un livrable).
+- `.github/workflows/agentic-review.yml` — workflow declenche sur `pull_request`.
+- `scripts/revue-agent.mjs` — lit le diff, invoque l'agent en **headless**, emet un
+  **verdict JSON** valide par schema.
+- `scripts/publier-verdict.mjs` — valide le verdict puis publie le commentaire.
+- `scripts/verdict-schema.mjs` — schema + validateur du verdict.
+
+Forme du verdict (validee ; un job qui produit du non-JSON **echoue**, il ne
+publie pas) :
+
+```json
+{
+  "verdict": "approve | request_changes | comment",
+  "findings": [ { "severite": "info|attention|bloquant", "fichier": "...", "message": "..." } ],
+  "summary": "resume en francais, 2 phrases max"
+}
+```
+
+Reflexes de production :
+
+- **Secrets** : `ANTHROPIC_API_KEY` en *Actions secrets*, jamais dans le YAML ni
+  le code. Le hook J2 reste actif.
+- **Idempotence** : le commentaire porte le marqueur cache
+  `<!-- opsdesk-revue-agent -->`. S'il existe, on l'**edite** (PATCH) au lieu d'en
+  creer un nouveau. Deux pushes -> un seul commentaire.
+- **Reprise** : `timeout-minutes: 10` ; relance **manuelle et tracee** (« re-run
+  failed jobs ») — pas de re-run automatique infini. Une relance ne duplique pas le
+  commentaire (grace au marqueur).
+- **Cout borne** : on n'envoie que le **diff** (pas tout le repo) ; **court-circuit**
+  sur les PR documentaires (`*.md` seul) — « revue non necessaire ».
+- **Observabilite** : chaque execution ecrit verdict + nb de findings dans le
+  **Job Summary** (`$GITHUB_STEP_SUMMARY`).
+- **Boucle bornee** : pas de **spawn massif** de sous-agents (anti-pattern). On
+  prefere le **sequentiel tracable** + etat-en-fichiers a un essaim opaque.
+
+## Branches
+
+Etats cumulatifs `etat/j1-fin` .. `etat/j5-fin`. Francais, sans emojis.
