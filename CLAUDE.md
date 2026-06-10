@@ -1,68 +1,70 @@
-# OpsDesk — Memoire projet (CLAUDE.md)
+# OpsDesk — Mémoire projet (CLAUDE.md)
 
-Outil interne de support / ticketing. Stack : TypeScript/Node + Fastify + SQLite
-(better-sqlite3) + Vitest + GitHub Actions. Cette memoire est chargee
-automatiquement par tout agent : conventions, contexte et garde-fous.
+OpsDesk est un mini back-office de gestion de tickets de support. Ce fichier est la
+**mémoire projet** : la première chose que l'agent lit. Il décrit comment on travaille ici
+pour ne pas redécouvrir le projet à chaque session.
 
-## Contexte & architecture
+## Stack & conventions
 
-- Serveur Fastify (`src/server.ts`) : `GET /health`, `GET /tickets`,
-  `GET /tickets/:id`, `POST /tickets/:id/status`.
-- Acces donnees : `src/tickets.ts` (`listTickets`, `getTicket`,
-  `updateTicketStatus`) — requetes TOUJOURS parametrees.
-- Base : `src/db.ts` (better-sqlite3), fichier `data/opsdesk.db`.
-- Seed : `npm run seed` reinsere 12 tickets de demo (ids 1001..1012).
+- TypeScript / Node (ESM, `"type": "module"`), Fastify, SQLite via `better-sqlite3`, tests Vitest.
+- Commandes depuis la **racine**, en `npm` : `npm run dev`, `npm run seed`, `npm test`, `npm run build`.
+- Base : `data/opsdesk.db`. Table `tickets` :
+  `id, subject, body, category, priority, status, created_at`.
+- Domaines de valeurs :
+  - `status` ∈ {`open`, `in_progress`, `closed`} (jamais `pending`).
+  - `category` ∈ {`acces`, `facturation`, `bug`, `demande`, `autre`}.
+  - `priority` ∈ 1..3.
+- Tickets de démo : ids **1001..1012** (réinsérés par `npm run seed`).
+- Requêtes **paramétrées** uniquement (cf. `src/tickets.ts`). Pas de SQL concaténé.
 
-## Conventions (non negociables)
+## Success criteria (rappel J1)
 
-- Table `tickets` en anglais : `id`, `subject`, `body`, `category`, `priority`,
-  `status`, `created_at`.
-- `status` dans { `open`, `in_progress`, `closed` } — **jamais** `pending`.
-- `priority` : entier 1..3.
-- Outils MCP : `list_tickets`, `get_ticket`, `update_ticket_status`.
-- npm partout ; commandes depuis la RACINE du depot. Francais, sans emojis.
+- `npm test` vert avant et après toute modification.
+- Routes santé/lecture/écriture statut opérationnelles (`src/server.ts`).
+- Modifications **chirurgicales** : ne toucher que ce que la tâche demande.
 
-## Sortie structuree : classification de ticket
+## Carte du contexte (où vit quoi)
 
-- Schema canonique (source de verite) : `src/classification/schema.ts` —
-  `categorie` dans { acces, facturation, bug, demande, autre }, `priorite`
-  entier 1..3, `besoin_humain` booleen, `confiance` nombre 0..1,
-  `justification` chaine.
-- **Regle** : toute classification DOIT valider `schema.ts` via
-  `validateClassification` / `parseClassification` (`src/classification/classify.ts`).
-  Une sortie non conforme est **rejetee**, jamais rafistolee a la main. Le
-  prompt *demande* le JSON ; le validateur *garantit* la conformite.
-- Tests : `npm test` (voir `test/classification.test.ts`) — cas vert + rejets.
+Trois horizons, trois durées de vie. Ranger chaque information au bon endroit.
 
-## Bibliotheque de prompts (versionnee)
+- **Session (volatile)** : la tâche en cours, les fichiers ouverts, le raisonnement immédiat.
+  → fenêtre de conversation, rien à persister.
+- **Mémoire projet (versionnée, partagée)** : conventions, architecture, décisions,
+  patterns « comment on fait ici ». → `CLAUDE.md` + `memory/*.md`.
+- **État de tâche (observable, sur disque)** : plan, étapes faites/à faire, journal, point
+  de reprise. → `plans/*.md`, `TODO.md`, `journal.md`.
 
-Les prompts utiles vivent dans le depot, pas dans la tete du developpeur
-(Act -> Learn -> Reuse).
+Principe : *plus on écrit vers l'extérieur (mémoire/état), moins on redécouvre.*
+C'est la boucle **Act → Learn → Reuse** : on agit dans la session, on apprend en écrivant
+vers la mémoire/l'état, on réutilise à la session suivante.
 
-- Specification versionnee : `prompts/classification.md` (les 6 composants +
-  sorties observees relues).
-- Slash-commands de projet (`.claude/commands/`) :
-  - `/classer-ticket <texte>` — classe un ticket en JSON conforme au schema.
-  - `/repondre-ticket <id|texte>` — BROUILLON de reponse client ; relecture
-    humaine obligatoire avant envoi.
-  - `/revue-diff` — revue du diff stage (conventions + alerte secrets).
+## Tâches récurrentes
 
-## Gouvernance : hook bloquant
+- **Répondre à un ticket** → suivre `memory/reponses-tickets.md`
+  (ton, structure accusé → réponse → prochaine étape → clôture ; sortie `replies/<id>.md` ;
+  relecture humaine obligatoire avant tout envoi).
+- **Classer en lot / écrire en base de façon fiable** → suivre `memory/idempotence.md`
+  (écrire seulement si absent, journaliser, marquer les cas douteux `needs_review`).
 
-- `scripts/check-secrets.sh` : scan **deterministe** (regex) du diff stage ;
-  bloque (code != 0) si secret en clair (motif `opsdesk_live_`, cles longues,
-  cle privee PEM) ou `*.env` non `*.env.example`.
-- `.claude/settings.json` : hook `PreToolUse` sur `Bash` ; sur une commande
-  `git commit`, lance le script et **bloque** le commit si un secret est detecte.
-- **La detection deterministe est la barriere ; le modele n'est qu'assistant.**
-  On ne demande jamais au modele de juger seul « ce commit contient-il un secret ? ».
+## Planifier avant de coder
 
-> Secret factice : `src/config.ts` contient `OPSDESK_API_KEY = "opsdesk_live_..."`.
-> Il est laisse VOLONTAIREMENT pour donner du sens au hook. On le **neutralise
-> par le hook**, on ne le supprime pas.
+Pour toute tâche multi-étapes (nouvelle feature, refactor) : écrire d'abord un plan dans
+`plans/<tache>.plan.md` (objectif, étapes, fichiers touchés, tests, risques), le faire
+**relire et approuver par un humain**, puis seulement exécuter. Gabarit : `plans/exemple.plan.md`.
+Tenir `TODO.md` et `journal.md` à jour au fil de l'eau (observabilité).
 
-## Relecture humaine
+## Sortie structurée (classification, J2 → réutilisé J4/J5)
 
-Aucune sortie de modele (prompt, schema, classification, reponse client) n'entre
-au portfolio sans **trace de validation humaine** datee (case cochee,
-`Reviewed-by`, ou note). Une reponse client n'est jamais envoyee sans relecture.
+Schéma : `src/classification/schema.ts`. Sortie d'une classification de ticket :
+`{ categorie, priorite, besoin_humain, confiance, justification }`
+(categorie ∈ {acces,facturation,bug,demande,autre} ; priorite 1..3 ; besoin_humain bool ;
+confiance 0..1 ; justification string).
+
+## Garde-fous
+
+- **Aucun secret dans la mémoire** : `CLAUDE.md` et `memory/*.md` sont versionnés/partagés —
+  pas de clé, token, URL privée ni donnée client réelle. Le hook bloquant J2 (motif
+  `opsdesk_live_`) doit rester actif.
+- **Relecture humaine** : plan validé avant code ; `replies/*.md` = propositions ; cas
+  douteux marqués, pas tranchés par l'agent.
+- **Fiabilité** : tant que le test n'est pas vert, la tâche n'est pas considérée fiable.
