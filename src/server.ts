@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { PORT } from "./config.js";
 import { getTicket, listTickets, updateTicketStatus } from "./tickets.js";
+import { ticketStats } from "./stats.js";
 
 const app = Fastify({ logger: true });
 
@@ -12,6 +13,13 @@ app.get("/health", async () => {
 // Liste tous les tickets.
 app.get("/tickets", async () => {
   return listTickets();
+});
+
+// Decompte des tickets par statut : { open, in_progress, closed }.
+// Feature produite par le pipeline planner -> builder -> reviewer (Lab J4.4).
+// Declare AVANT /tickets/:id pour ne pas etre capture par la route parametree.
+app.get("/tickets/stats", async () => {
+  return ticketStats();
 });
 
 // Retourne un ticket par identifiant.

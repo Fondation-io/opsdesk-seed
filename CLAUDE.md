@@ -1,70 +1,105 @@
-# OpsDesk — Mémoire projet (CLAUDE.md)
+# OpsDesk - guide pour agents (CLAUDE.md)
 
-OpsDesk est un mini back-office de gestion de tickets de support. Ce fichier est la
-**mémoire projet** : la première chose que l'agent lit. Il décrit comment on travaille ici
-pour ne pas redécouvrir le projet à chaque session.
+OpsDesk est un mini back-office de gestion de tickets de support.
+Stack : TypeScript / Node + Fastify + SQLite (better-sqlite3) + Vitest +
+GitHub Actions. Toutes les commandes se lancent depuis la **racine** du repo,
+avec **npm**.
 
-## Stack & conventions
+## Commandes
 
-- TypeScript / Node (ESM, `"type": "module"`), Fastify, SQLite via `better-sqlite3`, tests Vitest.
-- Commandes depuis la **racine**, en `npm` : `npm run dev`, `npm run seed`, `npm test`, `npm run build`.
-- Base : `data/opsdesk.db`. Table `tickets` :
-  `id, subject, body, category, priority, status, created_at`.
-- Domaines de valeurs :
-  - `status` ∈ {`open`, `in_progress`, `closed`} (jamais `pending`).
-  - `category` ∈ {`acces`, `facturation`, `bug`, `demande`, `autre`}.
-  - `priority` ∈ 1..3.
-- Tickets de démo : ids **1001..1012** (réinsérés par `npm run seed`).
-- Requêtes **paramétrées** uniquement (cf. `src/tickets.ts`). Pas de SQL concaténé.
+- `npm install` - installe les dependances.
+- `npm run seed` - peuple `data/opsdesk.db` (12 tickets, ids 1001..1012).
+- `npm run dev` - demarre l'API Fastify (port `PORT` ou 3000).
+- `npm test` / `npx vitest run` - lance la suite de tests.
+- `npm run build` - compile TypeScript.
 
-## Success criteria (rappel J1)
+## Conventions du domaine (a respecter a l'identique)
 
-- `npm test` vert avant et après toute modification.
-- Routes santé/lecture/écriture statut opérationnelles (`src/server.ts`).
-- Modifications **chirurgicales** : ne toucher que ce que la tâche demande.
+- Table `tickets` (anglais) : `id`, `subject`, `body`, `category`, `priority`,
+  `status`, `created_at`. Base : `data/opsdesk.db`.
+- `status` appartient strictement a `{ open, in_progress, closed }` - **jamais
+  `pending`**.
+- `priority` : entier `1..3`. Categories :
+  `{ acces, facturation, bug, demande, autre }`.
+- Acces base **toujours parametre** (`prepare(...).run/get/all`). Jamais de
+  concatenation de chaine, jamais de SQL libre.
+- Classification (J2) : schema canonique `src/classification/schema.ts`,
+  sortie `{ categorie, priorite, besoin_humain, confiance, justification }`.
 
-## Carte du contexte (où vit quoi)
+## Convention d'outil (J2/J4)
 
-Trois horizons, trois durées de vie. Ranger chaque information au bon endroit.
+Un outil expose a un agent = un **contrat** :
+**nom verbe-objet** + **description "quand / quand-pas"** + **schema d'arguments
+type** + **erreurs renvoyees en resultat** (pas en exception). Exemple :
+`update_ticket_status` (intentionnel) plutot que `run_query` (generique et
+dangereux).
 
-- **Session (volatile)** : la tâche en cours, les fichiers ouverts, le raisonnement immédiat.
-  → fenêtre de conversation, rien à persister.
-- **Mémoire projet (versionnée, partagée)** : conventions, architecture, décisions,
-  patterns « comment on fait ici ». → `CLAUDE.md` + `memory/*.md`.
-- **État de tâche (observable, sur disque)** : plan, étapes faites/à faire, journal, point
-  de reprise. → `plans/*.md`, `TODO.md`, `journal.md`.
+## Serveur MCP `tickets` (J4)
 
-Principe : *plus on écrit vers l'extérieur (mémoire/état), moins on redécouvre.*
-C'est la boucle **Act → Learn → Reuse** : on agit dans la session, on apprend en écrivant
-vers la mémoire/l'état, on réutilise à la session suivante.
+Le serveur `mcp/tickets-server.mjs` est un **guichet gouverne** sur la base
+SQLite. Il expose EXACTEMENT trois outils intentionnels, tous a requetes
+parametrees :
 
-## Tâches récurrentes
+- `list_tickets { status? }` - liste (filtre optionnel par statut).
+- `get_ticket { id }` - un ticket, ou `{ erreur: "ticket <id> introuvable" }`.
+- `update_ticket_status { id, status }` - met a jour le statut.
 
-- **Répondre à un ticket** → suivre `memory/reponses-tickets.md`
-  (ton, structure accusé → réponse → prochaine étape → clôture ; sortie `replies/<id>.md` ;
-  relecture humaine obligatoire avant tout envoi).
-- **Classer en lot / écrire en base de façon fiable** → suivre `memory/idempotence.md`
-  (écrire seulement si absent, journaliser, marquer les cas douteux `needs_review`).
+**Aucun** outil `run_query` / `execute_sql` n'est expose : ce que l'agent ne
+peut pas faire est aussi important que ce qu'il peut faire. Traiter ce serveur
+comme une **dependance de securite** (surface minimale, version epinglee).
 
-## Planifier avant de coder
+Brancher le serveur dans Claude Code (depuis la racine, chemin absolu) :
 
-Pour toute tâche multi-étapes (nouvelle feature, refactor) : écrire d'abord un plan dans
-`plans/<tache>.plan.md` (objectif, étapes, fichiers touchés, tests, risques), le faire
-**relire et approuver par un humain**, puis seulement exécuter. Gabarit : `plans/exemple.plan.md`.
-Tenir `TODO.md` et `journal.md` à jour au fil de l'eau (observabilité).
+```bash
+claude mcp add tickets -- node "$(pwd)/mcp/tickets-server.mjs"
+claude mcp list   # attendu : tickets ... connected
+```
 
-## Sortie structurée (classification, J2 → réutilisé J4/J5)
+Retirer si besoin : `claude mcp remove tickets`.
 
-Schéma : `src/classification/schema.ts`. Sortie d'une classification de ticket :
-`{ categorie, priorite, besoin_humain, confiance, justification }`
-(categorie ∈ {acces,facturation,bug,demande,autre} ; priorite 1..3 ; besoin_humain bool ;
-confiance 0..1 ; justification string).
+## Sous-agents et orchestration (J4)
+
+Trois sous-agents specialises sont versionnes dans `.claude/agents/`, aux
+roles non chevauchants et outils restreints (moindre privilege) :
+
+- **planner** (`planner.md`) - lecture seule (+ MCP `list_tickets`/`get_ticket`).
+  Produit un plan numerote dans `plans/<feature>.plan.md`. **Ne code pas.**
+- **builder** (`builder.md`) - Read/Write/Edit + Bash (tests) + MCP
+  `update_ticket_status`. **Execute le plan** tel quel, ecrit code + tests.
+  **Ne redefinit pas le perimetre.**
+- **reviewer** (`reviewer.md`) - lecture seule + Bash (relancer les tests).
+  Rend un **verdict** dans `reviews/<feature>.review.md`. **Ne corrige pas.**
+
+### Workflow d'orchestration (pipeline Chain)
+
+Pour livrer une feature, derouler la chaine **sequentielle** avec un point de
+controle humain a chaque jonction :
+
+```
+planner -> [valider le plan] -> builder -> [tests verts] -> reviewer -> [lire le verdict] -> merge
+```
+
+- Point de controle n.1 : l'ingenieur relit le plan (accepte / amende / refuse,
+  trace en une ligne dans `plans/`).
+- Point de controle n.2 : `npx vitest run` doit etre **vert** avant la revue.
+- Point de controle n.3 : l'ingenieur lit le verdict et tranche le merge.
+
+L'**etat passe par des fichiers** (`TODO.md`, `plans/`, `reviews/`), heritage
+de la pratique etat-en-fichiers de J3.
+
+> Orchestration : le **spawn massif d'agents en parallele** est un **debat**,
+> pas un dogme. Position de Mario **Zechner** (pi.dev) : c'est un
+> **anti-pattern** (perte d'observabilite, conflits d'ecriture, couts qui
+> explosent, relecture humaine impossible). On privilegie donc **peu d'agents
+> enchaines de facon lisible** + **etat-en-fichiers** + **observabilite** (trace
+> d'appels d'outils MCP, suivi type tmux). Le parallele ne se justifie que sur
+> des taches **reellement independantes, sans etat partage**, et **jamais** au
+> prix de la relecture humaine.
 
 ## Garde-fous
 
-- **Aucun secret dans la mémoire** : `CLAUDE.md` et `memory/*.md` sont versionnés/partagés —
-  pas de clé, token, URL privée ni donnée client réelle. Le hook bloquant J2 (motif
-  `opsdesk_live_`) doit rester actif.
-- **Relecture humaine** : plan validé avant code ; `replies/*.md` = propositions ; cas
-  douteux marqués, pas tranchés par l'agent.
-- **Fiabilité** : tant que le test n'est pas vert, la tâche n'est pas considérée fiable.
+- Relecture humaine **structurelle** : on ne merge jamais sur la seule parole
+  d'un agent ; le verdict ne remplace pas l'execution des tests.
+- Le secret `OPSDESK_API_KEY` (`src/config.ts`, motif `opsdesk_live_`) est
+  **volontairement** present et neutralise par le hook de gouvernance (J2) :
+  ne pas le supprimer.
