@@ -14,12 +14,23 @@ donnees d'exemple.
 
 ## Prerequis
 
-- Node.js 20+
-- npm
+- Node.js 20 a 22 (LTS). Node 24+ n'est pas supporte : better-sqlite3 v11 n'a
+  pas de binaire prebuild pour cette version et tenterait une compilation
+  (echec sur Windows sans outils de build). Le `.nvmrc` cible Node 22 ; avec nvm,
+  `nvm use` selectionne la bonne version. `engine-strict` (`.npmrc`) fait echouer
+  `npm ci` avec un message clair si la version de Node est hors plage.
+- npm 10+
 
 ## Installation
 
+Toujours `npm ci`, jamais `npm install`, et ne supprime pas `package-lock.json` :
+le lock fige les binaires natifs de chaque plateforme (Windows/macOS/Linux). Sur
+un clone propre, `npm ci` installe directement le bon binaire — aucune adaptation
+manuelle requise.
+
 ```bash
+nvm install   # premiere fois : installe Node 22 (lit .nvmrc)
+nvm use       # selectionne Node 22
 npm ci
 ```
 
