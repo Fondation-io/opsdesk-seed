@@ -34,6 +34,43 @@ nvm use       # selectionne Node 22
 npm ci
 ```
 
+## Depannage Windows : "Cannot find module @rollup/rollup-win32-x64-msvc"
+
+Bug npm des dependances optionnelles (npm/cli#4828) : le binaire natif de rollup
+(utilise par Vitest) n'est pas installe. Procedure de secours **locale**, du plus
+propre au dernier recours. S'arreter des que `npm test` passe.
+
+1. Reinstall propre (ne touche pas au lock, aucune derive de versions) :
+
+   ```bash
+   rmdir /s /q node_modules        # PowerShell : Remove-Item -Recurse -Force node_modules
+   npm ci
+   npm test
+   ```
+
+2. Si ca echoue encore : installer juste le binaire manquant, version alignee sur
+   le rollup present (ne modifie ni package.json ni le lock) :
+
+   ```bash
+   node -e "console.log(require('./node_modules/rollup/package.json').version)"
+   npm install @rollup/rollup-win32-x64-msvc@<version-affichee> --no-save
+   npm test
+   ```
+
+3. Dernier recours (regenere le lock sur ta machine) : supprimer node_modules ET
+   package-lock.json puis `npm install`. Attention : les versions peuvent bouger ;
+   **ne commite pas** ce `package-lock.json` regenere.
+
+   ```bash
+   rmdir /s /q node_modules
+   del package-lock.json
+   npm install
+   npm test
+   ```
+
+Avant toute suppression : fermer VS Code et tout terminal/serveur touchant le
+dossier, sinon un fichier verrouille bloque le nettoyage.
+
 ## Demarrage
 
 Initialiser la base avec le jeu de donnees d'exemple :
