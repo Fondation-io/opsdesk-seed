@@ -23,8 +23,5 @@
   },
   "engines": {
     "node": ">=20 <24"
-  },
-  "overrides": {
-    "rollup": "npm:@rollup/wasm-node@^4"
   }
 }
