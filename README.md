@@ -71,6 +71,21 @@ propre au dernier recours. S'arreter des que `npm test` passe.
 Avant toute suppression : fermer VS Code et tout terminal/serveur touchant le
 dossier, sinon un fichier verrouille bloque le nettoyage.
 
+## Depannage : push rejete (non-fast-forward) sur etat/jN-fin
+
+Les forks crees avant le renommage des branches de reference ont herite
+d'anciennes branches `etat/j1-fin`...`etat/j5-fin` (elles s'appellent
+desormais `ref/jN-fin` sur ce depot). Si ton `git push -u origin etat/j1-fin`
+est rejete, supprime d'abord la branche heritee de ton fork :
+
+```bash
+git push origin --delete etat/j1-fin   # adapte au jalon concerne
+git push -u origin etat/j1-fin         # re-pousse TA branche
+```
+
+Ces branches heritees sont des corriges : les garder sous les yeux vide les
+jalons de leur interet. Tu peux toutes les supprimer de ton fork sans risque.
+
 ## Demarrage
 
 Initialiser la base avec le jeu de donnees d'exemple :
